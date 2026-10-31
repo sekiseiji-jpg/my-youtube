@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="description" content="好みのワードを組み合わせて検索・視聴できるYouTubeプレーヤー">
+<title>MY Youtube</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="MY Youtube">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top" id="top">
+  <button id="btnMenu" class="icon" title="マイワードを開く" aria-label="マイワードを開く">☰</button>
+  <div class="brand"><span class="logo">▶</span><span class="bname">MY Youtube</span></div>
+  <div class="qbox">
+    <input id="extra" type="search" placeholder="追加キーワード（任意）" autocomplete="off" enterkeyhint="search">
+    <button id="btnSearch" class="primary">検索</button>
+  </div>
+  <div class="spacer"></div>
+  <span id="quota" class="quota" title="本日の推定API消費ユニット"></span>
+  <button id="btnHelp" class="icon" title="使い方">?</button>
+  <button id="btnSettings" class="icon" title="設定">⚙</button>
+</header>
+
+<div id="backdrop" class="backdrop"></div>
+
+<div class="app">
+  <aside id="side" class="side">
+
+    <div class="drawerhead only-mobile">
+      <span>メニュー</span>
+      <button id="btnCloseDrawer" class="icon" aria-label="閉じる">×</button>
+    </div>
+
+    <section class="panel">
+      <header><h2>マイワード</h2><button id="btnEditWords" class="mini">編集</button></header>
+      <p class="hint">タップで選択（AND）／長押し・Shift+クリックで除外</p>
+      <div id="words" class="words"></div>
+      <form id="addWord" class="addword">
+        <input id="newWord" placeholder="ワードを追加（カンマ区切り可）" autocomplete="off" enterkeyhint="done">
+        <input id="newGroup" placeholder="グループ" list="groupList" autocomplete="off">
+        <datalist id="groupList"></datalist>
+        <button class="mini primary" title="追加">＋</button>
+      </form>
+      <div class="selrow">
+        <span id="selCount" class="muted"></span>
+        <button id="btnClearSel" class="mini">選択クリア</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header><h2>保存した組み合わせ</h2><button id="btnSavePreset" class="mini">今の条件を保存</button></header>
+      <div id="presets" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <header><h2>再生キュー <span id="queueCount" class="badge"></span></h2><button id="btnClearQueue" class="mini">全消去</button></header>
+      <div id="queue" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <header><h2>お気に入り <span id="favCount" class="badge"></span></h2></header>
+      <div id="favs" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <header><h2>検索履歴</h2><button id="btnClearHist" class="mini">消去</button></header>
+      <div id="hist" class="list"></div>
+    </section>
+
+    <div class="drawerfoot only-mobile">
+      <button id="btnDrawerSearch" class="primary">この条件で検索</button>
+    </div>
+
+  </aside>
+
+  <main class="main">
+
+    <div class="theater hidden" id="theater">
+      <div class="playerbox"><div id="player"></div></div>
+      <div class="nowmeta">
+        <h2 id="nowTitle"></h2>
+        <div class="nowsub muted" id="nowSub"></div>
+        <div class="nowacts">
+          <button id="btnPrev" class="mini">◀ 前</button>
+          <button id="btnNext" class="mini">次 ▶</button>
+          <button id="btnFavNow" class="mini">♡ お気に入り</button>
+          <a id="linkNow" class="mini link" target="_blank" rel="noreferrer">YouTubeで開く</a>
+          <label class="mini chk"><input type="checkbox" id="autoNext"> 連続再生</label>
+          <button id="btnCloseTheater" class="mini">閉じる</button>
+        </div>
+        <div id="playerErr" class="err hidden"></div>
+      </div>
+    </div>
+
+    <div class="qpreview">
+      <span class="qlabel">検索クエリ</span>
+      <code id="qtext" class="qtext"></code>
+      <div class="qacts">
+        <button id="btnFilters" class="mini only-mobile">絞り込み ▾</button>
+        <button id="btnRefresh" class="mini" title="キャッシュを使わず再検索">↻ 再取得</button>
+      </div>
+    </div>
+
+    <div class="filters" id="filters">
+      <label>並び
+        <select id="fOrder">
+          <option value="relevance">関連度</option>
+          <option value="date">新着</option>
+          <option value="viewCount">再生数</option>
+          <option value="rating">評価</option>
+          <option value="title">タイトル</option>
+        </select>
+      </label>
+      <label>長さ
+        <select id="fDuration">
+          <option value="any">指定なし</option>
+          <option value="short">4分未満</option>
+          <option value="medium">4〜20分</option>
+          <option value="long">20分超</option>
+        </select>
+      </label>
+      <label>期間
+        <select id="fPeriod">
+          <option value="any">指定なし</option>
+          <option value="d1">24時間</option>
+          <option value="d7">1週間</option>
+          <option value="d30">1か月</option>
+          <option value="d365">1年</option>
+        </select>
+      </label>
+      <label>件数
+        <select id="fMax">
+          <option value="12">12</option>
+          <option value="24">24</option>
+          <option value="36">36</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <label>結合
+        <select id="fCombine">
+          <option value="and">すべて含む（AND）</option>
+          <option value="or">どれか含む（OR）</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="fHd"> 高画質のみ</label>
+      <label class="chk"><input type="checkbox" id="fCaption"> 字幕あり</label>
+      <label class="chk"><input type="checkbox" id="fJa"> 日本語を優先</label>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="results" class="results"></div>
+    <div class="morewrap">
+      <button id="btnQueueAll" class="ghost hidden">表示中のすべてをキューに追加</button>
+      <button id="btnMore" class="ghost hidden">もっと読み込む</button>
+    </div>
+
+  </main>
+</div>
+
+<button id="fabWords" class="fab only-mobile" aria-label="マイワードを開く">☰<span>ワード</span></button>
+
+<div id="modal" class="modal hidden">
+  <div class="sheet">
+    <button class="close" id="modalClose" title="閉じる">×</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

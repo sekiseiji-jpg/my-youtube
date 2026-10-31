@@ -1,0 +1,10 @@
+# OS / エディタ
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+.vscode/
+__pycache__/
+
+# ※ YouTube APIキーはブラウザの localStorage にのみ保存されるため、
+#    このリポジトリにはどのファイルにも含まれません。
