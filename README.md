@@ -33,30 +33,28 @@ PC・Android・iPhone のどれでも使えます。インストール不要・�
 アドレスバーのない全画面で起動します。
 ※ オフライン起動（Service Worker）は `https://` または `localhost` でのみ有効です。LAN経由の `http://192.168.x.x` では無効になりますが、アプリの動作自体に影響はありません。
 
-### 外出先からも見たい場合（GitHub Pages で公開する）
+### 外出先から使う（公開済み）
 
-上記は「PCの電源が入っていて同じWi-Fiにいる」ことが前提です。外出先からも使いたい場合は、このフォルダを静的ホスティングに置けばURL1つでどこからでも開けます。無料・HTTPS・URLが変わらない **GitHub Pages** がおすすめです（HTTPSになるのでオフライン起動＝Service Worker も有効になります）。
+上記のLAN経由は「PCの電源が入っていて同じWi-Fiにいる」ことが前提です。
+外出先用に GitHub Pages で公開してあります。PCを起動していなくても、どこからでもこのURLで使えます。
 
-このフォルダはすでに Git リポジトリとして初期化済みです。
+## 🌐 https://sekiseiji-jpg.github.io/my-youtube/
 
-1. [github.com/new](https://github.com/new) で空のリポジトリを作る
-   - 名前は `my-youtube` など／**Public** を選ぶ（Private だと Pages は有料プランが必要）
-   - README や .gitignore を追加する項目は**すべてオフ**のまま作成
-2. 作成後に表示されるURLを使って、このフォルダで次を実行する（`<あなたのユーザー名>` は置き換え）
+- リポジトリ：https://github.com/sekiseiji-jpg/my-youtube
+- HTTPSなので**オフライン起動（Service Worker）も有効**です。スマホでこのURLを開き、ホーム画面に追加してください
+- **公開リポジトリですが安全です。** APIキーはどのファイルにも含まれず、各端末のブラウザ内（localStorage）にのみ保存されます。公開されているのはアプリのコードだけです
 
-   ```
-   git remote add origin https://github.com/<あなたのユーザー名>/my-youtube.git
-   git push -u origin main
-   ```
+### 更新のしかた
 
-3. リポジトリの **Settings → Pages** を開き、Source を「Deploy from a branch」、Branch を **main / (root)** にして Save
-4. 1〜2分待つと `https://<あなたのユーザー名>.github.io/my-youtube/` で公開されます。このURLをスマホで開いてください
+ローカルでファイルを編集したあと、このフォルダで実行するだけで数分後に反映されます。
 
-**公開リポジトリに置いても安全です。** APIキーはどのファイルにも含まれず、各端末のブラウザ内（localStorage）にのみ保存されます。公開するのはアプリのコードだけです。
+```
+git add -A
+git commit -m "更新内容"
+git push
+```
 
-更新したいときは `git add -A && git commit -m "更新" && git push` だけで反映されます。
-
-> APIキーに「HTTPリファラー」の制限をかけている場合は、`https://<あなたのユーザー名>.github.io/my-youtube/*` も許可リストに追加してください。
+> APIキーに「HTTPリファラー」の制限をかけている場合は、`https://sekiseiji-jpg.github.io/my-youtube/*` も許可リストに追加してください。
 
 ### スマホでの操作
 
