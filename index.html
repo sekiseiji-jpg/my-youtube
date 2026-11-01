@@ -62,13 +62,28 @@
     </section>
 
     <section class="panel">
-      <header><h2>再生キュー <span id="queueCount" class="badge"></span></h2><button id="btnClearQueue" class="mini">全消去</button></header>
+      <header><h2>再生キュー <span id="queueCount" class="badge"></span></h2></header>
       <div id="queue" class="list"></div>
+      <div class="btnrow">
+        <button id="btnSaveQueue" class="mini">名前を付けて保存</button>
+        <button id="btnShuffleQueue" class="mini">シャッフル</button>
+        <button id="btnClearQueue" class="mini">全消去</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header><h2>プレイリスト <span id="plCount" class="badge"></span></h2></header>
+      <div id="playlists" class="list"></div>
     </section>
 
     <section class="panel">
       <header><h2>お気に入り <span id="favCount" class="badge"></span></h2></header>
       <div id="favs" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <header><h2>視聴履歴 <span id="watchedCount" class="badge"></span></h2><button id="btnClearWatched" class="mini">消去</button></header>
+      <div id="watched" class="list"></div>
     </section>
 
     <section class="panel">
@@ -95,6 +110,7 @@
           <button id="btnFavNow" class="mini">♡ お気に入り</button>
           <a id="linkNow" class="mini link" target="_blank" rel="noreferrer">YouTubeで開く</a>
           <label class="mini chk"><input type="checkbox" id="autoNext"> 連続再生</label>
+          <label class="mini chk"><input type="checkbox" id="repeatAll"> リピート</label>
           <button id="btnCloseTheater" class="mini">閉じる</button>
         </div>
         <div id="playerErr" class="err hidden"></div>
@@ -104,6 +120,7 @@
     <div class="qpreview">
       <span class="qlabel">検索クエリ</span>
       <code id="qtext" class="qtext"></code>
+      <button id="chanChip" class="chanchip hidden" type="button" title="チャンネル絞り込みを解除"></button>
       <div class="qacts">
         <button id="btnFilters" class="mini only-mobile">絞り込み ▾</button>
         <button id="btnRefresh" class="mini" title="キャッシュを使わず再検索">↻ 再取得</button>

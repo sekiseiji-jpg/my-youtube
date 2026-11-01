@@ -111,7 +111,9 @@ function checkStorage() {
 /* ---------------- 状態 ---------------- */
 const DEFAULT_OPTS = {
   order: 'relevance', duration: 'any', period: 'any', max: 24,
-  combine: 'and', hd: false, caption: false, ja: true, autoNext: true
+  combine: 'and', hd: false, caption: false, ja: true,
+  autoNext: true, repeat: false,
+  cacheMin: 30            // 検索結果をキャッシュする分数（APIの節約用）
 };
 
 const SAMPLE_WORDS = [
@@ -129,6 +131,10 @@ const state = {
   history: [],        // {q, sel, extra, opts, t}
   queue: [],          // video
   favs: [],           // video
+  watched: [],        // video（視聴履歴）
+  playlists: [],      // {id, name, items:[video]}
+  blocked: [],        // {id, title}（非表示チャンネル）
+  channelFilter: null,// {id, title}（このチャンネルだけ検索）
   results: [],        // video
   nextPageToken: null,
   lastSearch: null,   // {q, params}
@@ -300,12 +306,16 @@ function friendlyError(e) {
   }
 }
 
-/* キャッシュ（同じ条件の再検索でAPIを消費しないため・30分） */
-const CACHE_TTL = 30 * 60 * 1000;
+/* キャッシュ（同じ条件の再検索でAPIを消費しないため）
+   保持時間は設定画面で変更できる。0 にするとキャッシュを使わない。 */
+function cacheTTL() { return Math.max(0, Number(state.opts.cacheMin) || 0) * 60000; }
+
 function cacheGet(key) {
+  const ttl = cacheTTL();
+  if (!ttl) return null;
   const c = store.get('cache', {});
   const e = c[key];
-  if (!e || Date.now() - e.t > CACHE_TTL) return null;
+  if (!e || Date.now() - e.t > ttl) return null;
   return e.v;
 }
 function cacheSet(key, v) {
@@ -333,7 +343,44 @@ function searchParams(q) {
   if (o.hd) p.videoDefinition = 'high';
   if (o.caption) p.videoCaption = 'closedCaption';
   if (o.ja) { p.relevanceLanguage = 'ja'; p.regionCode = 'JP'; }
+  if (state.channelFilter) p.channelId = state.channelFilter.id;
   return p;
+}
+
+/* ---------------- チャンネルの絞り込み・非表示 ---------------- */
+function isBlocked(channelId) {
+  return !!channelId && state.blocked.some(c => c.id === channelId);
+}
+
+function renderChanChip() {
+  const chip = $('#chanChip');
+  if (!state.channelFilter) { chip.classList.add('hidden'); return; }
+  chip.classList.remove('hidden');
+  chip.textContent = `${decodeEntities(state.channelFilter.title)} ✕`;
+}
+
+function setChannelFilter(v) {
+  if (!v || !v.channelId) { toast('チャンネル情報が取得できませんでした'); return; }
+  state.channelFilter = { id: v.channelId, title: v.channel || 'チャンネル' };
+  renderChanChip();
+  toast(`${decodeEntities(state.channelFilter.title)} の動画に絞り込みます`);
+  doSearch();
+}
+
+function clearChannelFilter() {
+  if (!state.channelFilter) return;
+  state.channelFilter = null;
+  renderChanChip();
+  doSearch();
+}
+
+function blockChannel(v) {
+  if (!v.channelId) { toast('チャンネル情報が取得できませんでした'); return; }
+  if (isBlocked(v.channelId)) return;
+  state.blocked.push({ id: v.channelId, title: v.channel || 'チャンネル' });
+  store.set('blocked', state.blocked);
+  renderResults();
+  toast(`${decodeEntities(v.channel || '')} を非表示にしました（設定で解除できます）`);
 }
 
 function setStatus(msg, isError) {
@@ -416,13 +463,15 @@ async function doSearch({ append = false, force = false } = {}) {
 
 /* ---------------- 検索結果の描画 ---------------- */
 function isFav(id) { return state.favs.some(v => v.id === id); }
+function isWatched(id) { return state.watched.some(v => v.id === id); }
 
 function card(v) {
   const thumb = el('div', { class: 'thumb', onclick: () => play(v, 'results') }, [
     el('img', { src: v.thumb || '', alt: '', loading: 'lazy' }),
     v.live ? el('span', { class: 'live', text: 'LIVE' }) : null,
     v.dur ? el('span', { class: 'dur', text: v.dur }) : null,
-    el('span', { class: 'playicon', text: '▶' })
+    el('span', { class: 'playicon', text: '▶' }),
+    isWatched(v.id) ? el('span', { class: 'seenbadge', text: '視聴済み' }) : null
   ]);
 
   const favBtn = el('button', {
@@ -433,21 +482,31 @@ function card(v) {
     onclick: (ev) => { ev.stopPropagation(); toggleFav(v); }
   });
 
-  return el('article', { class: 'card' + (state.current === v.id ? ' playing' : ''), dataset: { id: v.id } }, [
+  return el('article', {
+    class: 'card' + (state.current === v.id ? ' playing' : '') + (isWatched(v.id) ? ' seen' : ''),
+    dataset: { id: v.id }
+  }, [
     thumb,
     el('div', { class: 'cmeta' }, [
       el('h3', { class: 'ctitle', text: decodeEntities(v.title), title: decodeEntities(v.title), onclick: () => play(v, 'results') }),
       el('div', { class: 'csub' }, [
-        decodeEntities(v.channel || ''),
-        v.views ? ` ・ ${fmtCount(v.views)}回` : '',
-        v.published ? ` ・ ${fmtAgo(v.published)}` : ''
-      ].join('')),
+        el('button', {
+          class: 'chan', type: 'button', text: decodeEntities(v.channel || ''),
+          title: 'このチャンネルの動画だけを検索',
+          onclick: (ev) => { ev.stopPropagation(); setChannelFilter(v); }
+        }),
+        [v.views ? ` ・ ${fmtCount(v.views)}回` : '', v.published ? ` ・ ${fmtAgo(v.published)}` : ''].join('')
+      ]),
       v.embeddable === false ? el('div', { class: 'noembed', text: '※ 埋め込み再生が制限された動画です' }) : null
     ]),
     el('div', { class: 'cacts' }, [
       el('button', { class: 'mini', text: '▶ 再生', type: 'button', onclick: () => play(v, 'results') }),
       el('button', { class: 'mini', text: '＋ キュー', type: 'button', onclick: () => addQueue(v) }),
       favBtn,
+      el('button', {
+        class: 'mini', text: '🚫', type: 'button', title: 'このチャンネルを今後非表示にする',
+        onclick: (ev) => { ev.stopPropagation(); blockChannel(v); }
+      }),
       el('a', { class: 'mini link', href: `https://www.youtube.com/watch?v=${v.id}`, target: '_blank', rel: 'noreferrer', text: 'YouTube' })
     ])
   ]);
@@ -461,14 +520,24 @@ function decodeEntities(s) {
   return decoder.value;
 }
 
+function visibleResults() {
+  return state.results.filter(v => !isBlocked(v.channelId));
+}
+
 function renderResults() {
   const box = $('#results');
   box.textContent = '';
-  if (!state.results.length) return;
-  const frag = document.createDocumentFragment();
-  for (const v of state.results) frag.appendChild(card(v));
-  box.appendChild(frag);
-  $('#btnQueueAll').classList.toggle('hidden', !state.results.length);
+  const list = visibleResults();
+  const hidden = state.results.length - list.length;
+  if (list.length) {
+    const frag = document.createDocumentFragment();
+    for (const v of list) frag.appendChild(card(v));
+    box.appendChild(frag);
+  }
+  if (hidden > 0) {
+    box.appendChild(el('p', { class: 'muted', text: `非表示チャンネルの ${hidden} 件を隠しています` }));
+  }
+  $('#btnQueueAll').classList.toggle('hidden', !list.length);
 }
 
 function renderSetup() {
@@ -588,7 +657,7 @@ function markPlaying() {
 }
 
 function neighbor(dir) {
-  const list = state.ctx === 'queue' ? state.queue : state.results;
+  const list = state.ctx === 'queue' ? state.queue : visibleResults();
   if (!list.length) return null;
   const i = list.findIndex(v => v.id === state.current);
   if (i < 0) return list[0];
@@ -598,7 +667,12 @@ function neighbor(dir) {
 function onEnded() {
   if (!state.opts.autoNext) return;
   const nx = neighbor(1);
-  if (nx) play(nx, state.ctx);
+  if (nx) { play(nx, state.ctx); return; }
+  // 最後まで来たらリピート設定に従って先頭へ戻る
+  if (state.opts.repeat) {
+    const list = state.ctx === 'queue' ? state.queue : visibleResults();
+    if (list.length) play(list[0], state.ctx);
+  }
 }
 
 function closeTheater() {
@@ -611,7 +685,10 @@ function closeTheater() {
 
 /* ---------------- キュー / お気に入り / 履歴 ---------------- */
 function slim(v) {
-  return { id: v.id, title: v.title, channel: v.channel, thumb: v.thumb, dur: v.dur, views: v.views, published: v.published, embeddable: v.embeddable };
+  return {
+    id: v.id, title: v.title, channel: v.channel, channelId: v.channelId,
+    thumb: v.thumb, dur: v.dur, views: v.views, published: v.published, embeddable: v.embeddable
+  };
 }
 
 function addQueue(v, quiet) {
@@ -697,8 +774,85 @@ function renderHistory() {
 }
 
 function pushWatched(v) {
-  const w = store.get('watched', []);
-  store.set('watched', [slim(v), ...w.filter(x => x.id !== v.id)].slice(0, 50));
+  state.watched = [Object.assign(slim(v), { at: Date.now() }), ...state.watched.filter(x => x.id !== v.id)].slice(0, 100);
+  store.set('watched', state.watched);
+  renderWatched();
+  renderResults();      // 「視聴済み」の印を反映する
+}
+
+function renderWatched() {
+  const box = $('#watched');
+  box.textContent = '';
+  for (const v of state.watched) {
+    box.appendChild(el('div', { class: 'row' + (state.current === v.id ? ' playing' : ''), dataset: { id: v.id } }, [
+      el('img', { src: v.thumb || '', alt: '' }),
+      el('div', { class: 'rowcol' }, [
+        el('div', { class: 'rt', text: decodeEntities(v.title), title: decodeEntities(v.title), onclick: () => play(v, 'results') }),
+        el('div', { class: 'rsub', text: [decodeEntities(v.channel || ''), v.at ? fmtAgo(new Date(v.at).toISOString()) : ''].filter(Boolean).join(' ・ ') })
+      ]),
+      el('button', { class: 'ract', text: '＋', title: 'キューへ', type: 'button', onclick: () => addQueue(v) }),
+      el('button', { class: 'ract', text: '×', title: '履歴から削除', type: 'button', onclick: () => {
+        state.watched = state.watched.filter(x => x.id !== v.id);
+        store.set('watched', state.watched);
+        renderWatched(); renderResults();
+      } })
+    ]));
+  }
+  $('#watchedCount').textContent = state.watched.length ? `${state.watched.length}件` : '';
+}
+
+/* ---------------- プレイリスト ---------------- */
+function saveQueueAsPlaylist() {
+  if (!state.queue.length) { toast('キューが空です'); return; }
+  const name = prompt('プレイリストの名前', `プレイリスト${state.playlists.length + 1}`);
+  if (name === null) return;
+  state.playlists.unshift({ id: uid(), name: name.trim() || `プレイリスト${state.playlists.length + 1}`, items: state.queue.map(slim) });
+  store.set('playlists', state.playlists);
+  renderPlaylists();
+  toast('プレイリストに保存しました');
+}
+
+function loadPlaylist(p, append) {
+  if (!p.items || !p.items.length) { toast('中身が空です'); return; }
+  state.queue = append ? state.queue.concat(p.items.filter(v => !state.queue.some(q => q.id === v.id))) : p.items.slice();
+  store.set('queue', state.queue);
+  renderQueue();
+  toast(append ? 'キューに追加しました' : `「${p.name}」をキューに読み込みました`);
+}
+
+function shuffleQueue() {
+  if (state.queue.length < 2) { toast('キューが足りません'); return; }
+  for (let i = state.queue.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [state.queue[i], state.queue[j]] = [state.queue[j], state.queue[i]];
+  }
+  store.set('queue', state.queue);
+  renderQueue();
+  toast('キューをシャッフルしました');
+}
+
+function renderPlaylists() {
+  const box = $('#playlists');
+  box.textContent = '';
+  for (const p of state.playlists) {
+    box.appendChild(el('div', { class: 'row' }, [
+      el('div', { class: 'rowcol' }, [
+        el('div', { class: 'rt', text: p.name, title: `${p.name}（${p.items.length}件）`, onclick: () => loadPlaylist(p, false) }),
+        el('div', { class: 'rsub', text: `${p.items.length}件` })
+      ]),
+      el('button', { class: 'ract', text: '＋', title: 'キューに追加', type: 'button', onclick: () => loadPlaylist(p, true) }),
+      el('button', { class: 'ract', text: '✎', title: '名前を変更', type: 'button', onclick: () => {
+        const n = prompt('名前', p.name); if (n === null) return;
+        p.name = n.trim() || p.name; store.set('playlists', state.playlists); renderPlaylists();
+      } }),
+      el('button', { class: 'ract', text: '×', title: '削除', type: 'button', onclick: () => {
+        if (!confirm(`「${p.name}」を削除しますか？`)) return;
+        state.playlists = state.playlists.filter(x => x.id !== p.id);
+        store.set('playlists', state.playlists); renderPlaylists();
+      } })
+    ]));
+  }
+  $('#plCount').textContent = state.playlists.length ? `${state.playlists.length}件` : '';
 }
 
 /* ---------------- 組み合わせプリセット ---------------- */
@@ -917,6 +1071,7 @@ function syncFilters() {
   $('#fCaption').checked = !!o.caption;
   $('#fJa').checked = !!o.ja;
   $('#autoNext').checked = !!o.autoNext;
+  $('#repeatAll').checked = !!o.repeat;
 }
 
 function bindFilters() {
@@ -940,6 +1095,10 @@ function bindFilters() {
   });
   $('#autoNext').addEventListener('change', () => {
     state.opts.autoNext = $('#autoNext').checked;
+    store.set('opts', state.opts);
+  });
+  $('#repeatAll').addEventListener('change', () => {
+    state.opts.repeat = $('#repeatAll').checked;
     store.set('opts', state.opts);
   });
 }
@@ -988,6 +1147,52 @@ function openSettings() {
       })
     ]));
     body.appendChild(msg);
+
+    body.appendChild(el('h4', { text: '検索キャッシュ' }));
+    body.appendChild(el('p', { class: 'muted', text:
+      '同じ条件で検索し直したとき、ここで決めた時間内ならAPIを使わずに前の結果を表示します。長くするほど1日の検索回数を節約できますが、新しい動画は出てきにくくなります（↻ 再取得でいつでも最新を取得できます）。' }));
+    const cacheSel = el('select', { id: 'fCache' }, [
+      el('option', { value: '0', text: 'キャッシュしない' }),
+      el('option', { value: '30', text: '30分' }),
+      el('option', { value: '180', text: '3時間' }),
+      el('option', { value: '1440', text: '24時間' }),
+      el('option', { value: '10080', text: '1週間' })
+    ]);
+    cacheSel.value = String(state.opts.cacheMin);
+    cacheSel.addEventListener('change', () => {
+      state.opts.cacheMin = Number(cacheSel.value);
+      store.set('opts', state.opts);
+      toast('キャッシュの保持時間を変更しました');
+    });
+    const cacheCount = Object.keys(store.get('cache', {})).length;
+    body.appendChild(el('div', { class: 'btnrow' }, [
+      el('label', { class: 'chk mini' }, ['保持時間 ', cacheSel]),
+      el('span', { class: 'muted', text: `保存中 ${cacheCount} 件` })
+    ]));
+
+    body.appendChild(el('h4', { text: '非表示チャンネル' }));
+    if (!state.blocked.length) {
+      body.appendChild(el('p', { class: 'muted', text: '非表示にしたチャンネルはありません。検索結果の 🚫 ボタンで追加できます。' }));
+    } else {
+      const list = el('div', { class: 'list' });
+      const drawBlocked = () => {
+        list.textContent = '';
+        for (const c of state.blocked) {
+          list.appendChild(el('div', { class: 'row' }, [
+            el('div', { class: 'rowcol' }, [el('div', { class: 'rt', text: decodeEntities(c.title) })]),
+            el('button', { class: 'ract', text: '×', title: '解除', type: 'button', onclick: () => {
+              state.blocked = state.blocked.filter(x => x.id !== c.id);
+              store.set('blocked', state.blocked);
+              drawBlocked(); renderResults();
+              toast('非表示を解除しました');
+            } })
+          ]));
+        }
+        if (!state.blocked.length) list.appendChild(el('p', { class: 'muted', text: 'すべて解除しました。' }));
+      };
+      drawBlocked();
+      body.appendChild(list);
+    }
 
     body.appendChild(el('h4', { text: '家族用セットアップリンク' }));
     if (!cryptoOK()) {
@@ -1054,8 +1259,10 @@ function openSettings() {
         if (Array.isArray(data.presets)) { state.presets = data.presets; store.set('presets', state.presets); }
         if (Array.isArray(data.favs)) { state.favs = data.favs; store.set('favs', state.favs); }
         if (Array.isArray(data.queue)) { state.queue = data.queue; store.set('queue', state.queue); }
+        if (Array.isArray(data.playlists)) { state.playlists = data.playlists; store.set('playlists', state.playlists); }
+        if (Array.isArray(data.blocked)) { state.blocked = data.blocked; store.set('blocked', state.blocked); }
         if (data.opts) { Object.assign(state.opts, data.opts); store.set('opts', state.opts); }
-        renderWords(); renderPresets(); renderFavs(); renderQueue(); syncFilters(); updateQuery();
+        renderWords(); renderPresets(); renderFavs(); renderQueue(); renderPlaylists(); syncFilters(); updateQuery();
         toast('読み込みました');
         closeModal();
       } catch (e) { alert('ファイルを読み込めませんでした: ' + e.message); }
@@ -1064,7 +1271,10 @@ function openSettings() {
     body.appendChild(el('div', { class: 'btnrow' }, [
       el('button', {
         class: 'mini', text: '書き出し (JSON)', type: 'button', onclick: () => {
-          const data = { words: state.words, presets: state.presets, favs: state.favs, queue: state.queue, opts: state.opts };
+          const data = {
+            words: state.words, presets: state.presets, favs: state.favs,
+            queue: state.queue, playlists: state.playlists, blocked: state.blocked, opts: state.opts
+          };
           const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
           const a = el('a', { href: url, download: `myplayer-backup-${new Date().toISOString().slice(0, 10)}.json` });
           document.body.appendChild(a); a.click(); a.remove();
@@ -1115,6 +1325,18 @@ function openHelp() {
         <li><b>ホーム画面に追加</b>すると全画面のアプリとして起動します。iPhone は Safari の共有ボタン →「ホーム画面に追加」、Android は Chrome のメニュー →「ホーム画面に追加」。</li>
         <li>PCと同じWi-Fiにつないで、PC側で <code>serve-lan.cmd</code> を実行すると、表示されたURL（例 http://192.168.x.x:8787/）でスマホから開けます。</li>
       </ul>
+      <h4>プレイリストと連続再生</h4>
+      <ul>
+        <li>キューに動画を貯めたら「名前を付けて保存」で<b>プレイリスト</b>になります。次回はプレイリスト名をタップでキューに読み込み、＋ で追記できます。</li>
+        <li><b>シャッフル</b>でキューの順番をランダムに並べ替えます。</li>
+        <li>プレーヤーの<b>連続再生</b>で次の動画へ自動で進み、<b>リピート</b>を入れると最後まで行ったら先頭に戻ります。</li>
+      </ul>
+      <h4>視聴履歴とチャンネルの整理</h4>
+      <ul>
+        <li>一度再生した動画は検索結果に「<b>視聴済み</b>」と表示され、サムネイルが暗くなります。サイドバーの<b>視聴履歴</b>からいつでも再生できます。</li>
+        <li>動画の<b>チャンネル名</b>をタップすると、そのチャンネルの動画だけを検索します。解除は検索クエリ欄のチャンネル名（✕付き）をタップ。</li>
+        <li><b>🚫</b> ボタンでそのチャンネルを今後の検索結果から隠せます。解除は ⚙設定 の「非表示チャンネル」から。</li>
+      </ul>
       <h4>家族と設定を共有する</h4>
       <p>⚙設定 →「家族用セットアップリンク」でパスワードを決めてリンクを作ります。家族はそのリンクを開いてパスワードを入れるだけで、APIキーとマイワードが入ります。中身はパスワードで暗号化されているので、リンクだけ見られても設定は取り出せません。パスワードを3回間違えると10分間ロックされます。</p>
       <p>リンクとパスワードは別々の手段で伝えてください（例：リンクはLINE、パスワードは口頭）。</p>
@@ -1137,7 +1359,7 @@ function wire() {
   $('#btnRefresh').addEventListener('click', () => doSearch({ force: true }));
   $('#btnMore').addEventListener('click', () => doSearch({ append: true }));
   $('#btnQueueAll').addEventListener('click', () => {
-    state.results.forEach(v => addQueue(v, true));
+    visibleResults().forEach(v => addQueue(v, true));
     renderQueue();
     toast('表示中の動画をキューに追加しました');
   });
@@ -1238,6 +1460,13 @@ function wire() {
     if (!state.queue.length || !confirm('キューを空にしますか？')) return;
     state.queue = []; store.set('queue', state.queue); renderQueue();
   });
+  $('#btnSaveQueue').addEventListener('click', saveQueueAsPlaylist);
+  $('#btnShuffleQueue').addEventListener('click', shuffleQueue);
+  $('#btnClearWatched').addEventListener('click', () => {
+    if (!state.watched.length || !confirm('視聴履歴を消去しますか？')) return;
+    state.watched = []; store.set('watched', state.watched); renderWatched(); renderResults();
+  });
+  $('#chanChip').addEventListener('click', clearChannelFilter);
   $('#btnClearHist').addEventListener('click', () => {
     state.history = []; store.set('history', state.history); renderHistory();
   });
@@ -1273,6 +1502,9 @@ function init() {
   state.history = store.get('history', []);
   state.queue = store.get('queue', []);
   state.favs = store.get('favs', []);
+  state.watched = store.get('watched', []);
+  state.playlists = store.get('playlists', []);
+  state.blocked = store.get('blocked', []);
   Object.assign(state.opts, store.get('opts', {}));
 
   seedWordsIfEmpty();
@@ -1282,9 +1514,12 @@ function init() {
   renderWords();
   renderPresets();
   renderQueue();
+  renderPlaylists();
   renderFavs();
+  renderWatched();
   renderHistory();
   renderQuota();
+  renderChanChip();
   updateQuery();
 
   setTopHeight();
