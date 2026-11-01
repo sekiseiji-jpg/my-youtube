@@ -745,6 +745,166 @@ function renderPresets() {
   }
 }
 
+/* ---------------- 家族用セットアップリンク ----------------
+   APIキーとマイワードをパスワードで「暗号化」してURLの # 以降に載せる。
+   パスワード判定ではなく実際の暗号化（PBKDF2 + AES-GCM）なので、
+   パスワードを知らない人はリンクを入手しても中身を取り出せない。
+   # 以降はサーバーに送信されないため、通信経路にも残らない。        */
+const SETUP_ITER = 310000;      // PBKDF2 の反復回数（総当たりを遅くする）
+const LOCK_TRIES = 3;           // 何回間違えたらロックするか
+const LOCK_MS = 10 * 60 * 1000; // ロックする時間
+
+function cryptoOK() {
+  return !!(window.crypto && window.crypto.subtle && window.isSecureContext);
+}
+
+function b64url(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function unb64url(str) {
+  const s = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+async function deriveKey(password, salt) {
+  const base = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: SETUP_ITER, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function buildSetupLink(password, withKey, withWords) {
+  const payload = {
+    k: withKey ? state.apiKey : '',
+    w: withWords ? state.words : [],
+    p: withWords ? state.presets : []
+  };
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(password, salt);
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload))));
+  const out = new Uint8Array(29 + ct.length);
+  out[0] = 1;                 // 形式バージョン
+  out.set(salt, 1);
+  out.set(iv, 17);
+  out.set(ct, 29);
+  return location.origin + location.pathname + '#s=' + b64url(out);
+}
+
+/* パスワードが違えば AES-GCM の認証が失敗して例外になる */
+async function openSetupPayload(password, bytes) {
+  if (bytes.length < 30 || bytes[0] !== 1) throw new Error('形式が違います');
+  const key = await deriveKey(password, bytes.slice(1, 17));
+  const pt = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: bytes.slice(17, 29) }, key, bytes.slice(29));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+function lockInfo() {
+  const l = store.get('setupLock', { fails: 0, until: 0 });
+  return { fails: l.fails || 0, left: Math.max(0, (l.until || 0) - Date.now()) };
+}
+
+function applySetup(data) {
+  if (data.k) { state.apiKey = data.k; store.set('apiKey', state.apiKey); }
+
+  // 同じワードが二重に増えないように、グループ+文字列で照合して追加する。
+  // プリセットがワードIDを参照しているので、IDは送り主のものをそのまま使う。
+  if (Array.isArray(data.w) && data.w.length) {
+    const sig = new Set(state.words.map(w => w.group + '\n' + w.text));
+    const ids = new Set(state.words.map(w => w.id));
+    for (const w of data.w) {
+      if (!w || !w.text) continue;
+      if (sig.has(w.group + '\n' + w.text)) continue;
+      sig.add(w.group + '\n' + w.text);
+      state.words.push({ id: ids.has(w.id) ? uid() : (w.id || uid()), text: w.text, group: w.group || '未分類' });
+    }
+    store.set('words', state.words);
+  }
+  if (Array.isArray(data.p) && data.p.length) {
+    const have = new Set(state.presets.map(p => p.id));
+    for (const p of data.p) if (p && !have.has(p.id)) state.presets.push(p);
+    store.set('presets', state.presets);
+  }
+
+  renderWords(); renderPresets(); updateQuery();
+  history.replaceState(null, '', location.pathname + location.search);
+  setStatus('設定を読み込みました。ワードを選んで検索してください。');
+}
+
+/* URL に共有リンクが付いていれば読み込みダイアログを出す。
+   すでにアプリを開いている状態でリンクを踏むとハッシュだけが変わり
+   ページが再読込されないので、hashchange からも呼ぶ。 */
+function checkSharedLink() {
+  const m = /[#&]s=([A-Za-z0-9\-_]+)/.exec(location.hash || '');
+  if (!m) return false;
+  if (!cryptoOK()) {
+    setStatus('共有リンクを開くには https:// のURLでアクセスしてください。', true);
+    return true;
+  }
+  try { askSetupPassword(unb64url(m[1])); }
+  catch (e) { setStatus('共有リンクの形式が正しくありません。', true); }
+  return true;
+}
+
+function askSetupPassword(bytes) {
+  openModal((body) => {
+    body.appendChild(el('h3', { text: '共有された設定を読み込む' }));
+
+    const lk = lockInfo();
+    if (lk.left > 0) {
+      body.appendChild(el('p', { class: 'err', text:
+        `パスワードを${LOCK_TRIES}回間違えたため、あと ${Math.ceil(lk.left / 60000)} 分は試せません。` }));
+      return;
+    }
+
+    body.appendChild(el('p', { text: '家族から共有された設定です。教えてもらったパスワードを入力してください。' }));
+    const input = el('input', { type: 'password', placeholder: 'パスワード', autocomplete: 'off' });
+    const note = el('p', { class: 'muted' });
+    const btn = el('button', { class: 'primary', text: '読み込む', type: 'button' });
+
+    const go = async () => {
+      if (lockInfo().left > 0) return;
+      const pw = input.value;
+      if (!pw) { note.textContent = 'パスワードを入力してください。'; return; }
+      btn.disabled = true; note.textContent = '確認中…';
+      try {
+        const data = await openSetupPayload(pw, bytes);
+        store.set('setupLock', { fails: 0, until: 0 });
+        applySetup(data);
+        closeModal();
+        toast('設定を読み込みました');
+      } catch (e) {
+        const fails = lockInfo().fails + 1;
+        if (fails >= LOCK_TRIES) {
+          store.set('setupLock', { fails: 0, until: Date.now() + LOCK_MS });
+          note.textContent = `パスワードが違います。${LOCK_TRIES}回間違えたので10分間ロックされました。`;
+          note.className = 'err';
+          input.disabled = true;
+          return;                       // ボタンは無効のまま
+        }
+        store.set('setupLock', { fails, until: 0 });
+        note.textContent = `パスワードが違います（あと ${LOCK_TRIES - fails} 回）`;
+        input.select();
+        btn.disabled = false;
+      }
+    };
+
+    btn.addEventListener('click', go);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    body.appendChild(el('div', { class: 'field' }, [input, btn]));
+    body.appendChild(note);
+    setTimeout(() => input.focus(), 60);
+  });
+}
+
 /* ---------------- フィルタUIの同期 ---------------- */
 function syncFilters() {
   const o = state.opts;
@@ -829,6 +989,60 @@ function openSettings() {
     ]));
     body.appendChild(msg);
 
+    body.appendChild(el('h4', { text: '家族用セットアップリンク' }));
+    if (!cryptoOK()) {
+      body.appendChild(el('p', { class: 'muted', text:
+        'この機能は https:// か localhost で開いたときだけ使えます（暗号化のため）。' }));
+    } else {
+      body.appendChild(el('p', { class: 'muted', text:
+        'APIキーとマイワードをパスワードで暗号化したリンクを作ります。家族はリンクを開いてパスワードを入れるだけで設定が完了します。パスワードを知らない人はリンクを入手しても中身を取り出せません。' }));
+
+      const pw = el('input', { type: 'password', placeholder: 'パスワード', autocomplete: 'new-password' });
+      const chkKey = el('input', { type: 'checkbox', checked: true });
+      const chkWords = el('input', { type: 'checkbox', checked: true });
+      const out = el('textarea', { class: 'linkout hidden', readonly: true, rows: '3' });
+      const note = el('p', { class: 'muted' });
+
+      const make = async (ev) => {
+        const p = pw.value.trim();
+        if (p.length < 4) { note.textContent = 'パスワードは4文字以上にしてください。'; return; }
+        if (chkKey.checked && !state.apiKey) { note.textContent = 'APIキーが未設定です。先に上の欄で保存してください。'; return; }
+        ev.target.disabled = true;
+        note.textContent = '暗号化しています…';
+        try {
+          const link = await buildSetupLink(p, chkKey.checked, chkWords.checked);
+          out.value = link;
+          out.classList.remove('hidden');
+          note.textContent = 'リンクを作成しました。リンクとパスワードは別々の手段で伝えてください（例：リンクはLINE、パスワードは口頭）。'
+            + (link.length > 7000 ? ' ※リンクが長すぎます。ワードを減らすか「マイワードを含める」を外してください。' : '');
+        } catch (e) {
+          note.textContent = '作成に失敗しました: ' + e.message;
+        } finally {
+          ev.target.disabled = false;
+        }
+      };
+
+      body.appendChild(el('div', { class: 'field' }, [
+        pw,
+        el('button', { class: 'mini', text: '表示', type: 'button',
+          onclick: () => { pw.type = pw.type === 'password' ? 'text' : 'password'; } })
+      ]));
+      body.appendChild(el('div', { class: 'btnrow' }, [
+        el('label', { class: 'chk mini' }, [chkKey, ' APIキーを含める']),
+        el('label', { class: 'chk mini' }, [chkWords, ' マイワード・組み合わせを含める'])
+      ]));
+      body.appendChild(el('div', { class: 'btnrow' }, [
+        el('button', { class: 'primary', text: 'リンクを作成', type: 'button', onclick: make }),
+        el('button', { class: 'mini', text: 'コピー', type: 'button', onclick: async () => {
+          if (!out.value) { note.textContent = '先にリンクを作成してください。'; return; }
+          try { await navigator.clipboard.writeText(out.value); toast('リンクをコピーしました'); }
+          catch (e) { out.select(); note.textContent = 'コピーできなかったので、選択してコピーしてください。'; }
+        } })
+      ]));
+      body.appendChild(out);
+      body.appendChild(note);
+    }
+
     body.appendChild(el('h4', { text: 'データ' }));
     body.appendChild(el('p', { class: 'muted', text: `ワード ${state.words.length} 件 / 組み合わせ ${state.presets.length} 件 / お気に入り ${state.favs.length} 件` }));
     const fileIn = el('input', { type: 'file', accept: '.json', class: 'hidden' });
@@ -901,6 +1115,9 @@ function openHelp() {
         <li><b>ホーム画面に追加</b>すると全画面のアプリとして起動します。iPhone は Safari の共有ボタン →「ホーム画面に追加」、Android は Chrome のメニュー →「ホーム画面に追加」。</li>
         <li>PCと同じWi-Fiにつないで、PC側で <code>serve-lan.cmd</code> を実行すると、表示されたURL（例 http://192.168.x.x:8787/）でスマホから開けます。</li>
       </ul>
+      <h4>家族と設定を共有する</h4>
+      <p>⚙設定 →「家族用セットアップリンク」でパスワードを決めてリンクを作ります。家族はそのリンクを開いてパスワードを入れるだけで、APIキーとマイワードが入ります。中身はパスワードで暗号化されているので、リンクだけ見られても設定は取り出せません。パスワードを3回間違えると10分間ロックされます。</p>
+      <p>リンクとパスワードは別々の手段で伝えてください（例：リンクはLINE、パスワードは口頭）。</p>
       <h4>ショートカット（PC）</h4>
       <ul>
         <li><kbd>/</kbd> … 検索欄へ移動</li>
@@ -1087,6 +1304,10 @@ function init() {
   if (!storageOK) {
     setStatus('このページでは設定を保存できません（localStorage が使えない状態です）。付属の serve.cmd で http://localhost から開くと保存できます。', true);
   }
+  // 家族から共有されたセットアップリンク（#s=...）で開かれた場合
+  checkSharedLink();
+  window.addEventListener('hashchange', checkSharedLink);
+
   if (!state.apiKey) renderSetup();
   else setStatus('ワードを選んで検索してください。');
 }

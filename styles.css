@@ -246,6 +246,14 @@ body.editwords .chip{cursor:default}
 }
 .field input:focus{border-color:var(--accent)}
 .btnrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+label.chk.mini{background:var(--bg3);border:1px solid var(--line);padding:5px 11px;border-radius:999px;font-size:12px}
+.linkout{
+  width:100%;margin-top:10px;padding:9px 11px;
+  background:var(--bg3);border:1px solid var(--line);border-radius:8px;color:var(--fg);
+  font-family:ui-monospace,Consolas,Menlo,monospace;font-size:11px;
+  word-break:break-all;resize:vertical;outline:none;
+}
+.linkout:focus{border-color:var(--accent)}
 kbd{
   background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;
   border-radius:4px;padding:1px 5px;font-size:11px;font-family:inherit;
