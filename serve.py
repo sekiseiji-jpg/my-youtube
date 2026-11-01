@@ -1,4 +1,4 @@
-"""MY Youtube のローカルサーバー。
+"""MyPlayer のローカルサーバー。
 
 同じ Wi-Fi につないだスマホ（Android / iPhone）からも開けるように、
 PC のすべてのネットワークインターフェースで待ち受け、
@@ -73,7 +73,7 @@ def main():
     ip = lan_ip()
     bar = '=' * 54
     print(bar)
-    print('  MY Youtube  -  サーバーを起動しました')
+    print('  MyPlayer  -  サーバーを起動しました')
     print(bar)
     print('  このPC          :  http://localhost:%d/' % port)
     if ip:

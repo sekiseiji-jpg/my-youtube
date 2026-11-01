@@ -1,5 +1,5 @@
 @echo off
-rem ---- MY Youtube : start the local server (PC + phones on the same Wi-Fi) ----
+rem ---- MyPlayer : start the local server (PC + phones on the same Wi-Fi) ----
 setlocal
 cd /d "%~dp0"
 

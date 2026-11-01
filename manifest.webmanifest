@@ -1,6 +1,6 @@
 {
-  "name": "MY Youtube",
-  "short_name": "MY Youtube",
+  "name": "MyPlayer",
+  "short_name": "MyPlayer",
   "description": "好みのワードを組み合わせて検索・視聴できるYouTubeプレーヤー",
   "lang": "ja",
   "start_url": "./",

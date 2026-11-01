@@ -1,4 +1,4 @@
-/* MY Youtube - Service Worker
+/* MyPlayer - Service Worker
    アプリ本体（HTML/CSS/JS/アイコン）だけをキャッシュする。
    YouTube への通信はキャッシュせず、常にネットワークを使う。 */
 const CACHE = 'myyt-v1';

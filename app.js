@@ -1,5 +1,5 @@
 /* ============================================================
-   MY Youtube  -  好きなワードを組み合わせて検索・視聴するアプリ
+   MyPlayer  -  好きなワードを組み合わせて検索・視聴するアプリ
    依存ライブラリなし / データは全てブラウザの localStorage に保存
    ============================================================ */
 'use strict';
@@ -852,7 +852,7 @@ function openSettings() {
         class: 'mini', text: '書き出し (JSON)', type: 'button', onclick: () => {
           const data = { words: state.words, presets: state.presets, favs: state.favs, queue: state.queue, opts: state.opts };
           const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-          const a = el('a', { href: url, download: `myyoutube-backup-${new Date().toISOString().slice(0, 10)}.json` });
+          const a = el('a', { href: url, download: `myplayer-backup-${new Date().toISOString().slice(0, 10)}.json` });
           document.body.appendChild(a); a.click(); a.remove();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
